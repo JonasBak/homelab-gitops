@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/sirupsen/logrus"
-	"go.mozilla.org/sops/v3/decrypt"
+	"github.com/getsops/sops/v3/decrypt"
 	"gopkg.in/yaml.v3"
 )
 
