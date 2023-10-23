@@ -10,6 +10,12 @@ import (
 var l = logrus.New()
 var log = l.WithFields(logrus.Fields{})
 
+type Manifest struct {
+	Container map[string][]string
+	Unit      map[string][]string
+	Service   map[string][]string
+}
+
 type PrePostScript struct {
 	Script string `yaml:"script"`
 }
@@ -22,7 +28,9 @@ type Config struct {
 	Pre  *PrePostScript `yaml:"pre"`
 	Post *PrePostScript `yaml:"post"`
 
-	Services map[string]Service `yaml:"services"`
+	Networks map[string]map[string][]string `yaml:"networks"`
+	Volumes  map[string]map[string][]string `yaml:"networks"`
+	Services map[string]Service             `yaml:"services"`
 }
 
 var environ = append(os.Environ())

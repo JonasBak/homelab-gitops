@@ -116,7 +116,7 @@ func servicesUp(hostGitopsDir string) {
 		templateValues["SERVICE"] = service
 		templateValues["HASH"] = hash
 
-		containerFile := generateContainerFile(manifest, service, hash, templateValues)
+		containerFile := GenerateContainerFile(manifest, service, hash, templateValues)
 		err = os.WriteFile(fmt.Sprintf(CONTAINER_UNIT_FILE_PATH, os.Getenv("HOME"), service), []byte(containerFile), 0640)
 		if err != nil {
 			log.WithField("error", err.Error()).Errorf("failed to write container file")
