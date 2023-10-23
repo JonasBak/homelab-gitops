@@ -147,8 +147,7 @@ func buildFields(kvs map[string][]string, templateKV map[string]string) string {
 	}
 	sort.Strings(keys)
 
-	for key := range keys {
-		field := keys[key]
+	for _, field := range keys {
 		values := kvs[field]
 		for i := range values {
 			value := values[i]
@@ -204,4 +203,16 @@ func readManifest(serviceDir string) (Manifest, error) {
 	}
 
 	return config, nil
+}
+
+func getOrphanedServices(config Config, runningServices map[string]string) []string {
+	orphanedServices := []string{}
+
+	for service := range runningServices {
+		if _, ok := config.Services[service]; !ok {
+			orphanedServices = append(orphanedServices, service)
+		}
+	}
+
+	return orphanedServices
 }

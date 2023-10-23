@@ -45,7 +45,7 @@ func TestGenerateContainerFile(t *testing.T) {
 		"CONFIG_DIR": "/config",
 	}
 
-	manifestFile := GenerateContainerFile(manifest, "test-service", "test-hash", templateKV)
+	manifestFile := generateContainerFile(manifest, "test-service", "test-hash", templateKV)
 
 	assertEq(t, manifestFile, `
 [Install]
@@ -77,7 +77,7 @@ func TestGenerateNetworkFile(t *testing.T) {
 		"Subnet": {"172.16.0.0/24"},
 	}
 
-	manifestFile := GenerateNetworkFile(manifest, "test-network")
+	manifestFile := generateNetworkFile(manifest, "test-network")
 
 	assertEq(t, manifestFile, `
 [Network]
@@ -95,7 +95,7 @@ func TestGenerateVolumeFile(t *testing.T) {
 		"Group": {"root"},
 	}
 
-	manifestFile := GenerateVolumeFile(manifest, "test-volume")
+	manifestFile := generateVolumeFile(manifest, "test-volume")
 
 	assertEq(t, manifestFile, `
 [Volume]

@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-func GenerateContainerFile(manifest Manifest, service string, hash string, templateKV map[string]string) string {
+func generateContainerFile(manifest Manifest, service string, hash string, templateKV map[string]string) string {
 	containerFields := buildFields(manifest.Container, templateKV)
 	unitFields := buildFields(manifest.Unit, templateKV)
 	serviceFields := buildFields(manifest.Service, templateKV)
@@ -30,7 +30,7 @@ Label=gitops-hash=%s
 	return file
 }
 
-func GenerateNetworkFile(kvs map[string][]string, networkName string) string {
+func generateNetworkFile(kvs map[string][]string, networkName string) string {
 	networkFields := buildFields(kvs, make(map[string]string))
 
 	sha := sha256.New()
@@ -47,7 +47,7 @@ Label=gitops-hash=%s
 	return file
 }
 
-func GenerateVolumeFile(kvs map[string][]string, volumeName string) string {
+func generateVolumeFile(kvs map[string][]string, volumeName string) string {
 	volumeFields := buildFields(kvs, make(map[string]string))
 
 	sha := sha256.New()

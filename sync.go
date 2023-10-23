@@ -8,12 +8,16 @@ import (
 
 // Relative to hostGitopsDir
 var CONFIG_FILE_PATH = "%s/config.yml"
+
 // Relative to home, with service name
 var CONTAINER_UNIT_FILE_PATH = "%s/.config/containers/systemd/gitops-%s.container"
+
 // With service name
 var SERVICE_UNIT_NAME = "gitops-%s.service"
+
 // Relative to service dir
 var SERVICE_MANIFEST_FILE = "%s/manifest.yml"
+
 // Relative to service dir
 var SERVICE_MANIFEST_SOPS_FILE = "%s/manifest.sops.yml"
 
@@ -116,7 +120,7 @@ func servicesUp(hostGitopsDir string) {
 		templateValues["SERVICE"] = service
 		templateValues["HASH"] = hash
 
-		containerFile := GenerateContainerFile(manifest, service, hash, templateValues)
+		containerFile := generateContainerFile(manifest, service, hash, templateValues)
 		err = os.WriteFile(fmt.Sprintf(CONTAINER_UNIT_FILE_PATH, os.Getenv("HOME"), service), []byte(containerFile), 0640)
 		if err != nil {
 			log.WithField("error", err.Error()).Errorf("failed to write container file")
@@ -177,18 +181,18 @@ func orphansDown(hostGitopsDir string) {
 	serviceStopped := make(map[string]struct{})
 	serviceFailed := make(map[string]struct{})
 
-	for service := range runningServices {
-		if _, ok := config.Services[service]; !ok {
-      // TODO remove old .container files
-			_, err := runCommand(hostGitopsDir, false, "systemctl", "--user", "stop", fmt.Sprintf(SERVICE_UNIT_NAME, service))
-			if err != nil {
-				log.WithField("error", err.Error()).Errorf("failed to stop orphaned service")
-				serviceFailed[service] = struct{}{}
-				continue
-			}
-			log.WithField("service", service).Info("stopped orphaned service")
-			serviceStopped[service] = struct{}{}
+	orphanedServices := getOrphanedServices(config, runningServices)
+
+	for _, service := range orphanedServices {
+		// TODO remove old .container files
+		_, err := runCommand(hostGitopsDir, false, "systemctl", "--user", "stop", fmt.Sprintf(SERVICE_UNIT_NAME, service))
+		if err != nil {
+			log.WithField("error", err.Error()).Errorf("failed to stop orphaned service")
+			serviceFailed[service] = struct{}{}
+			continue
 		}
+		log.WithField("service", service).Info("stopped orphaned service")
+		serviceStopped[service] = struct{}{}
 	}
 
 	if len(serviceFailed) > 0 {
