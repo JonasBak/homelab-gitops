@@ -216,3 +216,54 @@ func getOrphanedServices(config Config, runningServices map[string]string) []str
 
 	return orphanedServices
 }
+
+func getUpdatedServices(config Config, runningServices map[string]string) []string {
+	updatedServices := []string{}
+
+	for service := range config.Services {
+		if newHash := runningServices[service]; config.Services[service].Hash != "" && config.Services[service].Hash != newHash {
+			updatedServices = append(updatedServices, service)
+		}
+	}
+
+	return updatedServices
+}
+
+func writeContainerFile(hostGitopsDir string, name string, config Service) (string, error) {
+	log := log.WithField("service", name)
+
+	log.Info("updating service")
+
+	serviceDir := fmt.Sprintf("%s/%s", hostGitopsDir, name)
+
+	hash, err := hashDir(serviceDir + "/")
+	if err != nil {
+		return "", err
+	}
+
+	log = log.WithField("hash", hash)
+
+	manifest, err := readManifest(serviceDir)
+	if err != nil {
+		return "", err
+	}
+
+	templateValues := make(map[string]string)
+	templateValues["HOST_DIR"] = hostGitopsDir
+	templateValues["SERVICE_DIR"] = serviceDir
+	templateValues["SERVICE"] = name
+	templateValues["HASH"] = hash
+
+	containerFile := generateContainerFile(manifest, name, hash, templateValues)
+	err = os.WriteFile(fmt.Sprintf(CONTAINER_UNIT_FILE_PATH, os.Getenv("HOME"), name), []byte(containerFile), 0640)
+	if err != nil {
+		return "", err
+	}
+
+	_, err = runCommand(hostGitopsDir, false, "systemctl", "--user", "daemon-reload")
+	if err != nil {
+		return "", err
+	}
+
+	return hash, nil
+}

@@ -2,16 +2,6 @@ package main
 
 import "testing"
 
-func assertEq(t *testing.T, got, want, reason string) {
-	if got != want {
-		t.Errorf(`Error: %s.
-    Got:
-    %s
-    Expected:
-    %s`, reason, got, want)
-	}
-}
-
 func TestGenerateContainerFile(t *testing.T) {
 	manifest := Manifest{
 		Container: map[string][]string{

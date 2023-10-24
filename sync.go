@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // Relative to hostGitopsDir
@@ -84,85 +85,71 @@ func servicesUp(hostGitopsDir string) {
 		log.WithField("error", err.Error()).Fatal("failed to get running containers")
 	}
 
-	serviceOk := make(map[string]struct{})
-	serviceFailed := make(map[string]struct{})
-
 	log.Info("starting services")
 	for service := range config.Services {
 		log := log.WithField("service", service)
 
-		log.Info("updating service")
-
-		serviceFailed[service] = struct{}{}
-
-		serviceDir := fmt.Sprintf("%s/%s", hostGitopsDir, service)
-
-		hash, err := hashDir(serviceDir + "/")
+		hash, err := writeContainerFile(hostGitopsDir, service, config.Services[service])
 		if err != nil {
-			log.WithField("error", err.Error()).Error("failed to hash dir")
+			log.WithField("error", err.Error()).Error("failed to write container file")
 			continue
 		}
 		s := config.Services[service]
 		s.Hash = hash
 		config.Services[service] = s
 
-		log = log.WithField("hash", hash)
-
-		manifest, err := readManifest(serviceDir)
-		if err != nil {
-			log.WithField("error", err.Error()).Error("failed to read manifest for service")
-			continue
-		}
-
-		templateValues := make(map[string]string)
-		templateValues["HOST_DIR"] = hostGitopsDir
-		templateValues["SERVICE_DIR"] = serviceDir
-		templateValues["SERVICE"] = service
-		templateValues["HASH"] = hash
-
-		containerFile := generateContainerFile(manifest, service, hash, templateValues)
-		err = os.WriteFile(fmt.Sprintf(CONTAINER_UNIT_FILE_PATH, os.Getenv("HOME"), service), []byte(containerFile), 0640)
-		if err != nil {
-			log.WithField("error", err.Error()).Errorf("failed to write container file")
-			continue
-		}
-
-		_, err = runCommand(hostGitopsDir, false, "systemctl", "--user", "daemon-reload")
-		if err != nil {
-			log.WithField("error", err.Error()).Errorf("failed to reload service")
-			continue
-		}
-
-		delete(serviceFailed, service)
-		serviceOk[service] = struct{}{}
+		oldHash := runningServices[service]
+		log = log.WithField("oldHash", oldHash).WithField("newHash", hash)
 
 		log.Info("container file created")
+		if oldHash != hash {
+			log.Info("service changed")
+		}
 	}
 
-	for service := range serviceOk {
+	tries := len(config.Services)
+	updatedServices := getUpdatedServices(config, runningServices)
+
+	for tries >= 0 && len(updatedServices) > 0 {
+		service := updatedServices[0]
 		newHash := config.Services[service].Hash
 		oldHash := runningServices[service]
 		log := log.WithField("service", service).WithField("oldHash", oldHash).WithField("newHash", newHash)
-		log.Info("evaluating restart")
-		if newHash != oldHash {
-			log.Info("service changed, restarting")
-			_, err := runCommand(hostGitopsDir, false, "systemctl", "--user", "restart", fmt.Sprintf(SERVICE_UNIT_NAME, service))
-			if err != nil {
-				log.WithField("error", err.Error()).Errorf("failed to start service")
-				serviceFailed[service] = struct{}{}
-			}
+		log.Info("restarting service")
+		_, err := runCommand(hostGitopsDir, false, "systemctl", "--user", "restart", fmt.Sprintf(SERVICE_UNIT_NAME, service))
+		if err != nil {
+			log.WithField("error", err.Error()).Errorf("failed to start service")
+			// Remove the hash to indicate that the service failed
+			s := config.Services[service]
+			s.Hash = ""
+			config.Services[service] = s
 		}
+		// Wait a bit for the container to start before reading updated services
+		time.Sleep(3 * time.Second)
+		// starting one service might have automatically started dependencies, so we need to get an updated list
+		runningServices, _ = parseRunningServices()
+		updatedServices = getUpdatedServices(config, runningServices)
+		tries -= 1
 	}
 
-	if len(serviceFailed) > 0 {
-		log.Fatal("failed to start some services")
+	if tries < 0 {
+		log.Error("used too many attempts to start services")
+		return
+	}
+
+	for _, v := range config.Services {
+		if v.Hash == "" {
+			log.Error("failed to start one or more services")
+			return
+		}
 	}
 
 	if config.Post != nil {
 		log.Info("running post script")
 		_, err := runCommand(hostGitopsDir, false, "bash", "-c", "--", config.Post.Script)
 		if err != nil {
-			log.WithField("error", err.Error()).Fatal("post script failed")
+			log.WithField("error", err.Error()).Error("post script failed")
+			return
 		}
 	}
 
@@ -178,7 +165,6 @@ func orphansDown(hostGitopsDir string) {
 		log.WithField("error", err.Error()).Fatal("failed to get running containers")
 	}
 
-	serviceStopped := make(map[string]struct{})
 	serviceFailed := make(map[string]struct{})
 
 	orphanedServices := getOrphanedServices(config, runningServices)
@@ -192,12 +178,40 @@ func orphansDown(hostGitopsDir string) {
 			continue
 		}
 		log.WithField("service", service).Info("stopped orphaned service")
-		serviceStopped[service] = struct{}{}
 	}
 
 	if len(serviceFailed) > 0 {
-		log.Fatal("failed to stop some orphaned services")
+		log.Error("failed to stop some orphaned services")
+		return
 	}
 
 	log.Info("orphaned services cleaned up")
+}
+
+// Stop orphaned services
+func allDown() {
+	runningServices, err := parseRunningServices()
+	if err != nil {
+		log.WithField("error", err.Error()).Fatal("failed to get running containers")
+	}
+
+	serviceFailed := make(map[string]struct{})
+
+	for _, service := range runningServices {
+		// TODO remove old .container files
+		_, err := runCommand("", false, "systemctl", "--user", "stop", fmt.Sprintf(SERVICE_UNIT_NAME, service))
+		if err != nil {
+			log.WithField("error", err.Error()).Errorf("failed to stop service")
+			serviceFailed[service] = struct{}{}
+			continue
+		}
+		log.WithField("service", service).Info("stopped service")
+	}
+
+	if len(serviceFailed) > 0 {
+		log.Error("failed to stop some services")
+		return
+	}
+
+	log.Info("services stopped")
 }

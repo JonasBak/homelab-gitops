@@ -11,9 +11,9 @@ var l = logrus.New()
 var log = l.WithFields(logrus.Fields{})
 
 type Manifest struct {
-	Container map[string][]string
-	Unit      map[string][]string
-	Service   map[string][]string
+	Container map[string][]string `yaml:"Container"`
+	Unit      map[string][]string `yaml:"Unit"`
+	Service   map[string][]string `yaml:"Service"`
 }
 
 type PrePostScript struct {
@@ -29,7 +29,7 @@ type Config struct {
 	Post *PrePostScript `yaml:"post"`
 
 	Networks map[string]map[string][]string `yaml:"networks"`
-	Volumes  map[string]map[string][]string `yaml:"networks"`
+	Volumes  map[string]map[string][]string `yaml:"volumes"`
 	Services map[string]Service             `yaml:"services"`
 }
 
@@ -58,12 +58,15 @@ func main() {
 		}
 		servicesUp(path)
 		break
-	case "down":
+	case "clean":
 		path, err := filepath.Abs(os.Args[2])
 		if err != nil {
 			log.Fatal(err.Error())
 		}
 		orphansDown(path)
+		break
+	case "down":
+		allDown()
 		break
 	default:
 		log.Fatalf("Unknown command '%s'", cmd)
