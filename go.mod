@@ -1,4 +1,4 @@
-module github.com/JonasBak/homelab-gitops
+module github.com/JonasBak/homelab_gitops
 
 go 1.19
 

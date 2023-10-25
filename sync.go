@@ -5,26 +5,13 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/JonasBak/homelab_gitops/utils"
 )
-
-// Relative to hostGitopsDir
-var CONFIG_FILE_PATH = "%s/config.yml"
-
-// Relative to home, with service name
-var CONTAINER_UNIT_FILE_PATH = "%s/.config/containers/systemd/gitops-%s.container"
-
-// With service name
-var SERVICE_UNIT_NAME = "gitops-%s.service"
-
-// Relative to service dir
-var SERVICE_MANIFEST_FILE = "%s/manifest.yml"
-
-// Relative to service dir
-var SERVICE_MANIFEST_SOPS_FILE = "%s/manifest.sops.yml"
 
 // Set up ssh env and load key in $SSH_KEY if provided
 func setupSSHEnv() {
-	sshAgent, _ := runCommand("", true, "ssh-agent")
+	sshAgent, _ := utils.RunCommand("", environ, true, "ssh-agent")
 	lines := strings.Split(sshAgent, "\n")
 	sshAuthSock := strings.Split(lines[0], ";")[0]
 	sshAgentPid := strings.Split(lines[1], ";")[0]
@@ -33,7 +20,7 @@ func setupSSHEnv() {
 		sshAgentPid,
 	)
 	if sshKey := os.Getenv("SSH_KEY"); sshKey != "" {
-		runCommand("", true, "ssh-add", sshKey)
+		utils.RunCommand("", environ, true, "ssh-add", sshKey)
 	}
 }
 
@@ -43,21 +30,21 @@ func fetch(gitopsRepo string, gitopsRepoDir string) (string, string) {
 	setupSSHEnv()
 
 	log.Info("syncing git repo")
-	if !pathExists(gitopsRepoDir) {
-		runCommand("", true, "git", "clone", gitopsRepo, gitopsRepoDir)
+	if !utils.PathExists(gitopsRepoDir) {
+		utils.RunCommand("", environ, true, "git", "clone", gitopsRepo, gitopsRepoDir)
 	}
 
-	runCommand(gitopsRepoDir, true, "git", "fetch")
+	utils.RunCommand(gitopsRepoDir, environ, true, "git", "fetch")
 
-	runCommand(gitopsRepoDir, true, "git", "clean", "--force")
+	utils.RunCommand(gitopsRepoDir, environ, true, "git", "clean", "--force")
 
 	commitToDeploy := "origin/HEAD"
 
-	runCommand(gitopsRepoDir, true, "git", "reset", "--hard", commitToDeploy)
+	utils.RunCommand(gitopsRepoDir, environ, true, "git", "reset", "--hard", commitToDeploy)
 
-	head, _ := runCommand(gitopsRepoDir, true, "git", "rev-parse", "HEAD")
+	head, _ := utils.RunCommand(gitopsRepoDir, environ, true, "git", "rev-parse", "HEAD")
 
-	runCommand(gitopsRepoDir, true, "git", "verify-commit", "-v", "HEAD")
+	utils.RunCommand(gitopsRepoDir, environ, true, "git", "verify-commit", "-v", "HEAD")
 
 	log.Infof("deploying %s", head)
 
@@ -69,18 +56,19 @@ func fetch(gitopsRepo string, gitopsRepoDir string) (string, string) {
 }
 
 // Start/restart configured services
-func servicesUp(hostGitopsDir string) {
-	config := readConfigFile(fmt.Sprintf(CONFIG_FILE_PATH, hostGitopsDir))
+func servicesUp(syncer utils.ServiceSyncer) error {
+	config := syncer.GetConfig()
 
 	if config.Pre != nil {
 		log.Info("running pre script")
-		_, err := runCommand(hostGitopsDir, false, "bash", "-c", "--", config.Pre.Script)
+		err := syncer.RunPre(config.Pre.Script)
 		if err != nil {
-			log.WithField("error", err.Error()).Fatal("pre script failed")
+			log.WithField("error", err.Error()).Error("pre script failed")
+			return fmt.Errorf("pre script failed")
 		}
 	}
 
-	runningServices, err := parseRunningServices()
+	runningServices, err := syncer.GetRunningServices()
 	if err != nil {
 		log.WithField("error", err.Error()).Fatal("failed to get running containers")
 	}
@@ -89,7 +77,7 @@ func servicesUp(hostGitopsDir string) {
 	for service := range config.Services {
 		log := log.WithField("service", service)
 
-		hash, err := writeContainerFile(hostGitopsDir, service, config.Services[service])
+		hash, err := syncer.CreateService(service, config.Services[service])
 		if err != nil {
 			log.WithField("error", err.Error()).Error("failed to write container file")
 			continue
@@ -116,7 +104,7 @@ func servicesUp(hostGitopsDir string) {
 		oldHash := runningServices[service]
 		log := log.WithField("service", service).WithField("oldHash", oldHash).WithField("newHash", newHash)
 		log.Info("restarting service")
-		_, err := runCommand(hostGitopsDir, false, "systemctl", "--user", "restart", fmt.Sprintf(SERVICE_UNIT_NAME, service))
+		err := syncer.RestartService(service)
 		if err != nil {
 			log.WithField("error", err.Error()).Errorf("failed to start service")
 			// Remove the hash to indicate that the service failed
@@ -127,40 +115,41 @@ func servicesUp(hostGitopsDir string) {
 		// Wait a bit for the container to start before reading updated services
 		time.Sleep(3 * time.Second)
 		// starting one service might have automatically started dependencies, so we need to get an updated list
-		runningServices, _ = parseRunningServices()
+		runningServices, _ = syncer.GetRunningServices()
 		updatedServices = getUpdatedServices(config, runningServices)
 		tries -= 1
 	}
 
 	if tries < 0 {
 		log.Error("used too many attempts to start services")
-		return
+		return fmt.Errorf("used too many attempts to start services")
 	}
 
 	for _, v := range config.Services {
 		if v.Hash == "" {
 			log.Error("failed to start one or more services")
-			return
+			return fmt.Errorf("failed to start one or more services")
 		}
 	}
 
 	if config.Post != nil {
 		log.Info("running post script")
-		_, err := runCommand(hostGitopsDir, false, "bash", "-c", "--", config.Post.Script)
+		err := syncer.RunPost(config.Post.Script)
 		if err != nil {
 			log.WithField("error", err.Error()).Error("post script failed")
-			return
+			return fmt.Errorf("post script failed")
 		}
 	}
 
 	log.Info("services up ok")
+	return nil
 }
 
 // Stop orphaned services
-func orphansDown(hostGitopsDir string) {
-	config := readConfigFile(fmt.Sprintf(CONFIG_FILE_PATH, hostGitopsDir))
+func orphansDown(syncer utils.ServiceSyncer) {
+	config := syncer.GetConfig()
 
-	runningServices, err := parseRunningServices()
+	runningServices, err := syncer.GetRunningServices()
 	if err != nil {
 		log.WithField("error", err.Error()).Fatal("failed to get running containers")
 	}
@@ -170,8 +159,7 @@ func orphansDown(hostGitopsDir string) {
 	orphanedServices := getOrphanedServices(config, runningServices)
 
 	for _, service := range orphanedServices {
-		// TODO remove old .container files
-		_, err := runCommand(hostGitopsDir, false, "systemctl", "--user", "stop", fmt.Sprintf(SERVICE_UNIT_NAME, service))
+		err := syncer.StopService(service)
 		if err != nil {
 			log.WithField("error", err.Error()).Errorf("failed to stop orphaned service")
 			serviceFailed[service] = struct{}{}
@@ -189,17 +177,16 @@ func orphansDown(hostGitopsDir string) {
 }
 
 // Stop orphaned services
-func allDown() {
-	runningServices, err := parseRunningServices()
+func allDown(syncer utils.ServiceSyncer) {
+	runningServices, err := syncer.GetRunningServices()
 	if err != nil {
 		log.WithField("error", err.Error()).Fatal("failed to get running containers")
 	}
 
 	serviceFailed := make(map[string]struct{})
 
-	for _, service := range runningServices {
-		// TODO remove old .container files
-		_, err := runCommand("", false, "systemctl", "--user", "stop", fmt.Sprintf(SERVICE_UNIT_NAME, service))
+	for service := range runningServices {
+		err := syncer.StopService(service)
 		if err != nil {
 			log.WithField("error", err.Error()).Errorf("failed to stop service")
 			serviceFailed[service] = struct{}{}

@@ -1,9 +1,29 @@
-package main
+package quadlet_syncer
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/JonasBak/homelab_gitops/utils"
+)
+
+func assert(t *testing.T, v bool, reason string) {
+	if !v {
+		t.Errorf(`Error: %s`, reason)
+	}
+}
+
+func assertEq[K comparable](t *testing.T, got, want K, reason string) {
+	if got != want {
+		t.Errorf(`Error: %s.
+    Got:
+    %+v
+    Expected:
+    %+v`, reason, got, want)
+	}
+}
 
 func TestGenerateContainerFile(t *testing.T) {
-	manifest := Manifest{
+	manifest := utils.Manifest{
 		Container: map[string][]string{
 			"Image": {
 				"docker.io/library/caddy:2.5.2-alpine",

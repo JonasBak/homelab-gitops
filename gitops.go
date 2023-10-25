@@ -4,34 +4,12 @@ import (
 	"os"
 	"path/filepath"
 
+	qs "github.com/JonasBak/homelab_gitops/quadlet_syncer"
 	"github.com/sirupsen/logrus"
 )
 
 var l = logrus.New()
 var log = l.WithFields(logrus.Fields{})
-
-type Manifest struct {
-	Container map[string][]string `yaml:"Container"`
-	Unit      map[string][]string `yaml:"Unit"`
-	Service   map[string][]string `yaml:"Service"`
-}
-
-type PrePostScript struct {
-	Script string `yaml:"script"`
-}
-
-type Service struct {
-	Hash string
-}
-
-type Config struct {
-	Pre  *PrePostScript `yaml:"pre"`
-	Post *PrePostScript `yaml:"post"`
-
-	Networks map[string]map[string][]string `yaml:"networks"`
-	Volumes  map[string]map[string][]string `yaml:"volumes"`
-	Services map[string]Service             `yaml:"services"`
-}
 
 var environ = append(os.Environ())
 
@@ -42,31 +20,42 @@ func main() {
 
 	cmd := os.Args[1]
 
+	syncer := qs.QuadletSyncer{}
+
 	switch cmd {
 	case "sync":
 		gitopsRepo := os.Args[2]
-		gitopsRepoDir := os.Args[3]
+		gitopsDir := os.Args[3]
 
-		_, dir := fetch(gitopsRepo, gitopsRepoDir)
-		servicesUp(dir)
-		orphansDown(dir)
+		_, hostGitopsDir := fetch(gitopsRepo, gitopsDir)
+
+		syncer.HostGitopsDir = hostGitopsDir
+
+		servicesUp(&syncer)
+		orphansDown(&syncer)
 		break
 	case "up":
-		path, err := filepath.Abs(os.Args[2])
+		hostGitopsDir, err := filepath.Abs(os.Args[2])
 		if err != nil {
 			log.Fatal(err.Error())
 		}
-		servicesUp(path)
+
+		syncer.HostGitopsDir = hostGitopsDir
+
+		servicesUp(&syncer)
 		break
 	case "clean":
-		path, err := filepath.Abs(os.Args[2])
+		hostGitopsDir, err := filepath.Abs(os.Args[2])
 		if err != nil {
 			log.Fatal(err.Error())
 		}
-		orphansDown(path)
+
+		syncer.HostGitopsDir = hostGitopsDir
+
+		orphansDown(&syncer)
 		break
 	case "down":
-		allDown()
+		allDown(&syncer)
 		break
 	default:
 		log.Fatalf("Unknown command '%s'", cmd)

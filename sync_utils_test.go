@@ -1,8 +1,9 @@
 package main
 
 import (
-  "testing"
-  "sort"
+	"github.com/JonasBak/homelab_gitops/utils"
+	"sort"
+	"testing"
 )
 
 func assert(t *testing.T, v bool, reason string) {
@@ -22,8 +23,8 @@ func assertEq[K comparable](t *testing.T, got, want K, reason string) {
 }
 
 func TestGetOrphanedServices(t *testing.T) {
-	config := Config{
-		Services: map[string]Service{
+	config := utils.Config{
+		Services: map[string]utils.Service{
 			"service-a": {Hash: "a"},
 			"service-b": {Hash: "a"},
 			"service-c": {Hash: "a"},
@@ -47,8 +48,8 @@ func TestGetOrphanedServices(t *testing.T) {
 }
 
 func TestGetUpdatedServices(t *testing.T) {
-	config := Config{
-		Services: map[string]Service{
+	config := utils.Config{
+		Services: map[string]utils.Service{
 			// This is up to date
 			"service-a": {Hash: "a"},
 			// This is a new service
@@ -69,9 +70,9 @@ func TestGetUpdatedServices(t *testing.T) {
 	}
 
 	updatedServices := getUpdatedServices(config, runningServices)
-  sort.Strings(updatedServices)
+	sort.Strings(updatedServices)
 
-  assertEq(t, len(updatedServices), 2, "expected two updated services")
-  assertEq(t, updatedServices[0], "service-b", "expected service-b to be updated")
-  assertEq(t, updatedServices[1], "service-d", "expected service-d to be updated")
+	assertEq(t, len(updatedServices), 2, "expected two updated services")
+	assertEq(t, updatedServices[0], "service-b", "expected service-b to be updated")
+	assertEq(t, updatedServices[1], "service-d", "expected service-d to be updated")
 }
