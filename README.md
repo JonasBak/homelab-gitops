@@ -26,17 +26,18 @@ services:
   service_a: {}
   service_b: {}
 > cat gitops/hostname_a/service_a/manifest.yml
-ContainerName:
-  - caddy
-Image:
-  - "docker.io/library/caddy:2.5.2-alpine"
-Volume:
-  - "/var/mnt/volumes/caddy:/data:z"
-  - "${SERVICE_DIR}/service_a_config_file:/etc/caddy/Caddyfile:z"
-Network:
-  - host
-HostName:
-  - hostname_a
+Container:
+  ContainerName:
+    - caddy
+  Image:
+    - "docker.io/library/caddy:2.5.2-alpine"
+  Volume:
+    - "/var/mnt/volumes/caddy:/data:z"
+    - "${SERVICE_DIR}/service_a_config_file:/etc/caddy/Caddyfile:z"
+  Network:
+    - host
+  HostName:
+    - hostname_a
 ```
 
 The fields in the manifest corresponds to the fields in [podman container unit files](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html#container-units-container). The way the program runs services is by:
@@ -52,3 +53,5 @@ The fields in the manifest corresponds to the fields in [podman container unit f
 If you need to add secrets to the manifest, you can create a file `manifest.sops.yml` using [sops](https://github.com/getsops/sops), and provide a way for the server to decrypt it using a `SOPS_*` environment variable. The configuration in the encrypted file will be "merged" with the normal manifest.
 
 The program is meant to be run in a service with a systemd timer as a non-root user.
+
+Dependencies between services are automatically handled by systemd, if `service_a` depends on `service_b`, you can add `gitops-service_b.service` to `Unit.Requires` in the manifest of `service_a`. This will for example make sure they are started in the correct order.
