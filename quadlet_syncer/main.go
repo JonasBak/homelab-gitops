@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/JonasBak/homelab_gitops/utils"
+	"github.com/JonasBak/homelab-gitops/utils"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -33,7 +33,7 @@ func (s *QuadletSyncer) GetRunningServices() (map[string]string, error) {
 }
 
 func (s *QuadletSyncer) CreateService(service string, serviceConfig utils.Service) (string, error) {
-	return writeContainerFile(s.HostGitopsDir, service, serviceConfig)
+	return createAndPrepareService(s.HostGitopsDir, service, serviceConfig)
 }
 
 func (s *QuadletSyncer) RestartService(service string) error {
@@ -45,7 +45,7 @@ func (s *QuadletSyncer) StopService(service string) error {
 }
 
 func (s *QuadletSyncer) RunPre(cmd string) error {
-	_, err := utils.RunCommand(s.HostGitopsDir, []string{}, false, "bash", "-c", "--", cmd)
+	_, err := utils.RunCommand(s.HostGitopsDir, os.Environ(), false, "bash", "-c", "--", cmd)
 	return err
 }
 
@@ -61,7 +61,7 @@ func parseRunningServices() (map[string]string, error) {
 		Labels map[string]string
 	}
 
-	output, err := utils.RunCommand("", []string{}, false, "podman", "ps", "--format", "json")
+	output, err := utils.RunCommand("", os.Environ(), false, "podman", "ps", "--format", "json")
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +82,7 @@ func parseRunningServices() (map[string]string, error) {
 	return services, nil
 }
 
-func writeContainerFile(hostGitopsDir string, name string, config utils.Service) (string, error) {
+func createAndPrepareService(hostGitopsDir string, name string, config utils.Service) (string, error) {
 	log := log.WithField("service", name)
 
 	log.Info("updating service")
@@ -113,21 +113,33 @@ func writeContainerFile(hostGitopsDir string, name string, config utils.Service)
 		return "", err
 	}
 
-	_, err = utils.RunCommand(hostGitopsDir, []string{}, false, "systemctl", "--user", "daemon-reload")
+	_, err = utils.RunCommand(hostGitopsDir, os.Environ(), false, "systemctl", "--user", "daemon-reload")
 	if err != nil {
 		return "", err
 	}
 
-	return hash, nil
+	// Make sure to pull the image so it's available when starting the service later, to avoid cases where it looks like
+	// the container hasn't startet but it's just pulling the image
+	return hash, pullImage(manifest)
+}
+
+func pullImage(manifest utils.Manifest) error {
+	for _, image := range manifest.Container["Image"] {
+		_, err := utils.RunCommand("", os.Environ(), false, "podman", "pull", image)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func restartService(service string) error {
-	_, err := utils.RunCommand("", []string{}, false, "systemctl", "--user", "restart", fmt.Sprintf(SERVICE_UNIT_NAME, service))
+	_, err := utils.RunCommand("", os.Environ(), false, "systemctl", "--user", "restart", fmt.Sprintf(SERVICE_UNIT_NAME, service))
 	return err
 }
 
 func stopService(service string) error {
-	_, err := utils.RunCommand("", []string{}, false, "systemctl", "--user", "stop", fmt.Sprintf(SERVICE_UNIT_NAME, service))
+	_, err := utils.RunCommand("", os.Environ(), false, "systemctl", "--user", "stop", fmt.Sprintf(SERVICE_UNIT_NAME, service))
 	if err != nil {
 		return err
 	}

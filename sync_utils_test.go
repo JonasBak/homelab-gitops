@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/JonasBak/homelab_gitops/utils"
+	"github.com/JonasBak/homelab-gitops/utils"
 	"sort"
 	"testing"
 )

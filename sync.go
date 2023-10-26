@@ -3,10 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
-	"github.com/JonasBak/homelab_gitops/utils"
+	"github.com/JonasBak/homelab-gitops/utils"
 )
 
 // Set up ssh env and load key in $SSH_KEY if provided
@@ -46,8 +47,6 @@ func fetch(gitopsRepo string, gitopsRepoDir string) (string, string) {
 
 	utils.RunCommand(gitopsRepoDir, environ, true, "git", "verify-commit", "-v", "HEAD")
 
-	log.Infof("deploying %s", head)
-
 	hostname := os.Getenv("HOSTNAME")
 
 	hostGitopsDir := fmt.Sprintf("%s/gitops/%s", gitopsRepoDir, hostname)
@@ -55,32 +54,43 @@ func fetch(gitopsRepo string, gitopsRepoDir string) (string, string) {
 	return head, hostGitopsDir
 }
 
+type SyncError struct {
+	err error
+
+	// TODO should there be "non-fatal" errors?
+	nonFatal        bool
+	servicesErrored []string
+}
+
+func (err *SyncError) Error() string {
+	return err.err.Error()
+}
+
 // Start/restart configured services
-func servicesUp(syncer utils.ServiceSyncer) error {
+func servicesUp(syncer utils.ServiceSyncer) *SyncError {
 	config := syncer.GetConfig()
 
 	if config.Pre != nil {
 		log.Info("running pre script")
 		err := syncer.RunPre(config.Pre.Script)
 		if err != nil {
-			log.WithField("error", err.Error()).Error("pre script failed")
-			return fmt.Errorf("pre script failed")
+			return &SyncError{err: fmt.Errorf("pre script failed: %s", err.Error())}
 		}
 	}
 
 	runningServices, err := syncer.GetRunningServices()
 	if err != nil {
-		log.WithField("error", err.Error()).Fatal("failed to get running containers")
+		return &SyncError{err: fmt.Errorf("failed to get running containers: %s", err.Error())}
 	}
 
-	log.Info("starting services")
+	log.Info("creating services")
 	for service := range config.Services {
 		log := log.WithField("service", service)
 
 		hash, err := syncer.CreateService(service, config.Services[service])
 		if err != nil {
-			log.WithField("error", err.Error()).Error("failed to write container file")
-			continue
+			// TODO Should a bad manifest cause the rollout to stop, or should the other services be started?
+			return &SyncError{err: fmt.Errorf("failed to create service: %s", err.Error()), servicesErrored: []string{service}}
 		}
 		s := config.Services[service]
 		s.Hash = hash
@@ -89,17 +99,28 @@ func servicesUp(syncer utils.ServiceSyncer) error {
 		oldHash := runningServices[service]
 		log = log.WithField("oldHash", oldHash).WithField("newHash", hash)
 
-		log.Info("container file created")
+		log.Info("service created")
 		if oldHash != hash {
 			log.Info("service changed")
 		}
 	}
 
-	tries := len(config.Services)
 	updatedServices := getUpdatedServices(config, runningServices)
+	restartAttempts := map[string]int{}
 
-	for tries >= 0 && len(updatedServices) > 0 {
+	log.Info("starting services")
+	for len(updatedServices) > 0 {
+		sort.SliceStable(updatedServices, func(i, j int) bool {
+			return restartAttempts[updatedServices[i]] < restartAttempts[updatedServices[j]]
+		})
 		service := updatedServices[0]
+
+		// Could increase this to attempt to start each service more than once
+		if restartAttempts[service] > 0 {
+			return &SyncError{err: fmt.Errorf("some services failed to start"), servicesErrored: updatedServices}
+		}
+		restartAttempts[service] = restartAttempts[service] + 1
+
 		newHash := config.Services[service].Hash
 		oldHash := runningServices[service]
 		log := log.WithField("service", service).WithField("oldHash", oldHash).WithField("newHash", newHash)
@@ -107,37 +128,26 @@ func servicesUp(syncer utils.ServiceSyncer) error {
 		err := syncer.RestartService(service)
 		if err != nil {
 			log.WithField("error", err.Error()).Errorf("failed to start service")
-			// Remove the hash to indicate that the service failed
-			s := config.Services[service]
-			s.Hash = ""
-			config.Services[service] = s
 		}
 		// Wait a bit for the container to start before reading updated services
 		time.Sleep(3 * time.Second)
 		// starting one service might have automatically started dependencies, so we need to get an updated list
 		runningServices, _ = syncer.GetRunningServices()
 		updatedServices = getUpdatedServices(config, runningServices)
-		tries -= 1
 	}
 
-	if tries < 0 {
-		log.Error("used too many attempts to start services")
-		return fmt.Errorf("used too many attempts to start services")
-	}
-
-	for _, v := range config.Services {
-		if v.Hash == "" {
-			log.Error("failed to start one or more services")
-			return fmt.Errorf("failed to start one or more services")
-		}
+	// Wait a bit to see if containers still run
+	time.Sleep(4 * time.Second)
+	runningServices, _ = syncer.GetRunningServices()
+	if servicesNotUpdated := getUpdatedServices(config, runningServices); len(servicesNotUpdated) != 0 {
+		return &SyncError{err: fmt.Errorf("some services didn't start properly"), servicesErrored: servicesNotUpdated}
 	}
 
 	if config.Post != nil {
 		log.Info("running post script")
 		err := syncer.RunPost(config.Post.Script)
 		if err != nil {
-			log.WithField("error", err.Error()).Error("post script failed")
-			return fmt.Errorf("post script failed")
+			return &SyncError{err: fmt.Errorf("post script failed: %s", err.Error())}
 		}
 	}
 
@@ -146,7 +156,7 @@ func servicesUp(syncer utils.ServiceSyncer) error {
 }
 
 // Stop orphaned services
-func orphansDown(syncer utils.ServiceSyncer) {
+func orphansDown(syncer utils.ServiceSyncer) *SyncError {
 	config := syncer.GetConfig()
 
 	runningServices, err := syncer.GetRunningServices()
@@ -154,7 +164,7 @@ func orphansDown(syncer utils.ServiceSyncer) {
 		log.WithField("error", err.Error()).Fatal("failed to get running containers")
 	}
 
-	serviceFailed := make(map[string]struct{})
+	serviceFailed := []string{}
 
 	orphanedServices := getOrphanedServices(config, runningServices)
 
@@ -162,18 +172,19 @@ func orphansDown(syncer utils.ServiceSyncer) {
 		err := syncer.StopService(service)
 		if err != nil {
 			log.WithField("error", err.Error()).Errorf("failed to stop orphaned service")
-			serviceFailed[service] = struct{}{}
+			serviceFailed = append(serviceFailed, service)
 			continue
 		}
 		log.WithField("service", service).Info("stopped orphaned service")
 	}
 
 	if len(serviceFailed) > 0 {
-		log.Error("failed to stop some orphaned services")
-		return
+		return &SyncError{err: fmt.Errorf("failed to stop some orphaned services"), servicesErrored: serviceFailed}
 	}
 
 	log.Info("orphaned services cleaned up")
+
+	return nil
 }
 
 // Stop orphaned services

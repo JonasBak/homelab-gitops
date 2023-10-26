@@ -4,7 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
-	qs "github.com/JonasBak/homelab_gitops/quadlet_syncer"
+	qs "github.com/JonasBak/homelab-gitops/quadlet_syncer"
 	"github.com/sirupsen/logrus"
 )
 
@@ -27,12 +27,25 @@ func main() {
 		gitopsRepo := os.Args[2]
 		gitopsDir := os.Args[3]
 
-		_, hostGitopsDir := fetch(gitopsRepo, gitopsDir)
+		ref, hostGitopsDir := fetch(gitopsRepo, gitopsDir)
+
+		log.WithField("ref", ref).Info("running sync")
 
 		syncer.HostGitopsDir = hostGitopsDir
 
-		servicesUp(&syncer)
-		orphansDown(&syncer)
+		errUp := servicesUp(&syncer)
+		if errUp != nil {
+			log.WithField("error", errUp.Error()).WithField("services", errUp.servicesErrored).Error("failed to start services")
+		}
+		errDown := orphansDown(&syncer)
+		if errDown != nil {
+			log.WithField("error", errDown.Error()).WithField("services", errDown.servicesErrored).Error("failed to clean up services")
+		}
+		if errUp == nil && errDown == nil {
+			log.WithField("ref", ref).Info("sync ok")
+		} else {
+			log.WithField("ref", ref).Fatal("sync failed")
+		}
 		break
 	case "up":
 		hostGitopsDir, err := filepath.Abs(os.Args[2])

@@ -2,9 +2,10 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"testing"
 
-	"github.com/JonasBak/homelab_gitops/utils"
+	"github.com/JonasBak/homelab-gitops/utils"
 )
 
 type testSyncer struct {
@@ -56,8 +57,6 @@ func TestServicesUp(t *testing.T) {
 			"service-b": {},
 			// Updated service
 			"service-c": {},
-			// Fails on create
-			"service-d": {},
 		},
 	}
 	syncer := testSyncer{
@@ -83,8 +82,8 @@ func TestServicesUp(t *testing.T) {
 
 	err := servicesUp(&syncer)
 
-	if err == nil {
-		t.Fatal("service-d failing should have made servicesUp return error")
+	if err != nil {
+		t.Fatalf("servicesUp should have exited without error, but got: %s", err.Error())
 	}
 
 	for service, count := range expectToStart {
@@ -92,6 +91,68 @@ func TestServicesUp(t *testing.T) {
 			t.Fatalf("service '%s' was expected to be started 1 time, was started %d times", service, count)
 		}
 	}
+}
+
+func TestServicesUpFailesToStart(t *testing.T) {
+	attempts := map[string]int{
+		"service-a": 0,
+		"service-b": 0,
+		"service-c": 0,
+		"service-d": 0,
+		"service-e": 0,
+	}
+	runningServices := map[string]string{}
+	config := utils.Config{
+		Services: map[string]utils.Service{
+			// These are ok
+			"service-a": {},
+			"service-b": {},
+			// These two fails
+			"service-c": {},
+			"service-d": {},
+			// This is ok
+			"service-e": {},
+		},
+	}
+	syncer := testSyncer{
+		config: config,
+		getRunningServices: func() map[string]string {
+			return runningServices
+		},
+		createService: func(service string) (string, error) {
+			return service, nil
+		},
+		restartService: func(service string) error {
+			attempts[service] = attempts[service] + 1
+			if service == "service-c" || service == "service-d" {
+				return fmt.Errorf("service failed")
+			}
+			runningServices[service] = service
+			return nil
+		},
+	}
+
+	err := servicesUp(&syncer)
+
+	if err == nil {
+		t.Fatal("service-d failing should have made servicesUp return error")
+	}
+
+	for service, attempts := range attempts {
+		if attempts != 1 {
+			t.Fatalf("service '%s' should have been attempted started 1 time, was %d", service, attempts)
+		}
+	}
+
+	assertEq(t, runningServices["service-a"], "service-a", "service-a should have been started")
+	assertEq(t, runningServices["service-b"], "service-b", "service-b should have been started")
+	assertEq(t, runningServices["service-e"], "service-e", "service-e should have been started")
+	assertEq(t, runningServices["service-c"], "", "service-c should not have been started")
+	assertEq(t, runningServices["service-d"], "", "service-d should not have been started")
+
+	sort.Strings(err.servicesErrored)
+	assertEq(t, err.servicesErrored[0], "service-c", "service-c should be reported as failed")
+	assertEq(t, err.servicesErrored[1], "service-d", "service-d should be reported as failed")
 }
 
 func TestOrphansDown(t *testing.T) {

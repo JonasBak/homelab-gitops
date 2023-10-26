@@ -3,7 +3,7 @@ package quadlet_syncer
 import (
 	"testing"
 
-	"github.com/JonasBak/homelab_gitops/utils"
+	"github.com/JonasBak/homelab-gitops/utils"
 )
 
 func assert(t *testing.T, v bool, reason string) {
